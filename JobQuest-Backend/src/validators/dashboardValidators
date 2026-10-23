@@ -1,0 +1,36 @@
+const { query } = require("express-validator");
+
+const validateDashboardQuery = [
+  query("startDate")
+    .optional()
+    .isISO8601()
+    .withMessage("Start date must be a valid ISO 8601 date"),
+
+  query("endDate")
+    .optional()
+    .isISO8601()
+    .withMessage("End date must be a valid ISO 8601 date"),
+];
+
+const validateFollowUpQuery = [
+  query("type")
+    .optional()
+    .isIn(["overdue", "upcoming", "all"])
+    .withMessage("Type must be overdue, upcoming, or all"),
+
+  query("page")
+    .optional()
+    .isInt({ min: 1 })
+    .withMessage("Page must be a positive integer")
+    .toInt(),
+
+  query("limit")
+    .optional()
+    .isInt({ min: 1, max: 100 })
+    .withMessage("Limit must be between 1 and 100"),
+];
+
+module.exports = {
+  validateDashboardQuery,
+  validateFollowUpQuery,
+};
