@@ -9,8 +9,12 @@ import {
   CheckCircle,
   Link as LinkIcon,
   MapPin,
-  Suitcase,
 } from "iconoir-react";
+
+type Company = {
+  _id: string;
+  name: string;
+};
 
 const inputClass =
   "mt-2 w-full border-0 border-b border-[#DDD4DF] bg-transparent px-0 py-3 text-sm text-[#42364D] outline-none transition placeholder:text-[#B5AAB9] focus:border-[#7965CD] focus:ring-0";
@@ -39,14 +43,73 @@ export default function NewApplicationPage() {
   });
 
   const [loading, setLoading] = useState(false);
+  const [companiesLoading, setCompaniesLoading] = useState(true);
   const [error, setError] = useState("");
   const [success, setSuccess] = useState(false);
+  const [companies, setCompanies] = useState<Company[]>([]);
 
   useEffect(() => {
     setForm((current) => ({
       ...current,
       appliedAt: new Date().toISOString().slice(0, 10),
     }));
+  }, []);
+
+  useEffect(() => {
+    async function loadCompanies() {
+      try {
+        setError("");
+
+        const response = await fetch("/api/v1/companies", {
+          cache: "no-store",
+        });
+
+        const contentType = response.headers.get("content-type") || "";
+
+        if (!contentType.includes("application/json")) {
+          const responseText = await response.text();
+
+          console.error("Companies API returned non-JSON response:", {
+            status: response.status,
+            response: responseText.slice(0, 300),
+          });
+
+          throw new Error(
+            "Companies API JSON return nahi kar rahi. API URL ya proxy configuration check karo."
+          );
+        }
+
+        const result = await response.json();
+
+        if (!response.ok) {
+          throw new Error(
+            result?.message || "Companies load nahi ho paayi."
+          );
+        }
+
+        const list = Array.isArray(result?.companies)
+          ? result.companies
+          : Array.isArray(result?.data?.companies)
+            ? result.data.companies
+            : Array.isArray(result?.data)
+              ? result.data
+              : [];
+
+        setCompanies(list);
+      } catch (err) {
+        console.error("Load companies error:", err);
+
+        setError(
+          err instanceof Error
+            ? err.message
+            : "Companies load nahi ho paayi."
+        );
+      } finally {
+        setCompaniesLoading(false);
+      }
+    }
+
+    void loadCompanies();
   }, []);
 
   function updateField(field: keyof typeof form, value: string) {
@@ -57,21 +120,41 @@ export default function NewApplicationPage() {
   }
 
   async function handleSubmit(
-    event: Parameters<
-      NonNullable<React.ComponentProps<"form">["onSubmit"]>
-    >[0],
+    event: React.FormEvent<HTMLFormElement>
   ) {
     event.preventDefault();
     setError("");
     setSuccess(false);
 
-    if (!form.jobTitle.trim() || !form.company.trim()) {
-      setError("Job title and company are required.");
+    if (!form.jobTitle.trim()) {
+      setError("Job title required hai.");
       return;
     }
 
-    if (form.jobUrl && !/^https?:\/\/.+/i.test(form.jobUrl.trim())) {
-      setError("Enter a valid URL starting with http:// or https://.");
+    if (!form.company) {
+      setError("Dropdown se company select karo.");
+      return;
+    }
+
+    if (
+      form.jobUrl.trim() &&
+      !/^https?:\/\/.+/i.test(form.jobUrl.trim())
+    ) {
+      setError("Valid job URL enter karo, jo http:// ya https:// se start ho.");
+      return;
+    }
+
+    const salaryValue = form.salary.trim()
+      ? Number(form.salary.trim())
+      : undefined;
+
+    if (
+      salaryValue !== undefined &&
+      (!Number.isFinite(salaryValue) || salaryValue < 0)
+    ) {
+      setError(
+        "Salary mein sirf non-negative number enter karo, jaise 600000."
+      );
       return;
     }
 
@@ -79,15 +162,20 @@ export default function NewApplicationPage() {
 
     try {
       const payload = {
-        ...form,
-        jobTitle: form.jobTitle.trim(),
-        company: form.company.trim(),
+        role: form.jobTitle.trim(),
+        company: form.company,
         location: form.location.trim(),
+        jobType: form.jobType,
+        workMode: form.workMode,
+        salary: salaryValue,
+        currency: "INR",
         jobUrl: form.jobUrl.trim(),
-        salary: form.salary.trim(),
-        description: form.description.trim(),
+        source: form.source,
+        status: form.status,
+        priority: form.priority,
+        appliedAt:
+          form.status === "WISHLIST" ? undefined : form.appliedAt,
         notes: form.notes.trim(),
-        appliedAt: form.status === "WISHLIST" ? undefined : form.appliedAt,
       };
 
       const response = await fetch("/api/applications", {
@@ -98,7 +186,23 @@ export default function NewApplicationPage() {
         body: JSON.stringify(payload),
       });
 
-      const result = await response.json().catch(() => null);
+      const contentType = response.headers.get("content-type") || "";
+      let result: any = null;
+
+      if (contentType.includes("application/json")) {
+        result = await response.json();
+      } else {
+        const responseText = await response.text();
+
+        console.error("Application API returned non-JSON response:", {
+          status: response.status,
+          response: responseText.slice(0, 300),
+        });
+
+        throw new Error(
+          "Application API JSON return nahi kar rahi. API route ya proxy configuration check karo."
+        );
+      }
 
       if (response.status === 401) {
         router.replace("/login");
@@ -106,8 +210,20 @@ export default function NewApplicationPage() {
       }
 
       if (!response.ok) {
+        const validationErrors = Array.isArray(result?.errors)
+          ? result.errors
+              .map(
+                (item: { field?: string; message?: string }) =>
+                  `${item.field ? `${item.field}: ` : ""}${item.message || ""}`
+              )
+              .filter(Boolean)
+              .join(" | ")
+          : "";
+
         throw new Error(
-          result?.message || "Unable to create this application.",
+          validationErrors ||
+            result?.message ||
+            "Application save nahi ho paayi."
         );
       }
 
@@ -118,10 +234,12 @@ export default function NewApplicationPage() {
         router.refresh();
       }, 700);
     } catch (err) {
+      console.error("Create application error:", err);
+
       setError(
         err instanceof Error
           ? err.message
-          : "Something went wrong. Please try again.",
+          : "Kuch galat hua. Dobara try karo."
       );
     } finally {
       setLoading(false);
@@ -187,6 +305,7 @@ export default function NewApplicationPage() {
                 <label htmlFor="jobTitle" className={labelClass}>
                   JOB TITLE *
                 </label>
+
                 <input
                   id="jobTitle"
                   required
@@ -204,17 +323,38 @@ export default function NewApplicationPage() {
                 <label htmlFor="company" className={labelClass}>
                   COMPANY *
                 </label>
-                <input
+
+                <select
                   id="company"
                   required
-                  maxLength={150}
                   value={form.company}
                   onChange={(event) =>
                     updateField("company", event.target.value)
                   }
-                  placeholder="Where are you applying?"
+                  disabled={companiesLoading || companies.length === 0}
                   className={inputClass}
-                />
+                >
+                  <option value="">
+                    {companiesLoading
+                      ? "Loading companies..."
+                      : companies.length === 0
+                        ? "No companies available"
+                        : "Select a company"}
+                  </option>
+
+                  {companies.map((company) => (
+                    <option key={company._id} value={company._id}>
+                      {company.name}
+                    </option>
+                  ))}
+                </select>
+
+                {!companiesLoading && companies.length === 0 && (
+                  <p className="mt-2 text-xs text-[#9B3E38]">
+                    Company list empty hai. Companies API check karo aur
+                    confirm karo ki tumhare account mein company added hai.
+                  </p>
+                )}
               </div>
 
               <div>
@@ -225,6 +365,7 @@ export default function NewApplicationPage() {
                   <MapPin width={13} height={13} />
                   LOCATION
                 </label>
+
                 <input
                   id="location"
                   maxLength={150}
@@ -241,12 +382,14 @@ export default function NewApplicationPage() {
                 <label htmlFor="jobUrl" className={labelClass}>
                   JOB POSTING
                 </label>
+
                 <div className="flex items-center gap-2">
                   <LinkIcon
                     width={15}
                     height={15}
                     className="shrink-0 text-[#A096AA]"
                   />
+
                   <input
                     id="jobUrl"
                     type="url"
@@ -267,6 +410,7 @@ export default function NewApplicationPage() {
                 <label htmlFor="jobType" className={labelClass}>
                   EMPLOYMENT TYPE
                 </label>
+
                 <select
                   id="jobType"
                   value={form.jobType}
@@ -286,6 +430,7 @@ export default function NewApplicationPage() {
                 <label htmlFor="workMode" className={labelClass}>
                   WORK MODE
                 </label>
+
                 <select
                   id="workMode"
                   value={form.workMode}
@@ -302,18 +447,25 @@ export default function NewApplicationPage() {
 
               <div className="min-w-36 flex-1">
                 <label htmlFor="salary" className={labelClass}>
-                  SALARY / STIPEND
+                  SALARY / STIPEND (NUMBER)
                 </label>
+
                 <input
                   id="salary"
-                  maxLength={100}
+                  type="number"
+                  min="0"
+                  step="any"
                   value={form.salary}
                   onChange={(event) =>
                     updateField("salary", event.target.value)
                   }
-                  placeholder="₹8–12 LPA"
+                  placeholder="600000"
                   className={inputClass}
                 />
+
+                <p className="mt-1 text-xs text-[#8B8193]">
+                  Annual salary ke liye 600000 = ₹6 lakh.
+                </p>
               </div>
             </div>
           </section>
@@ -333,6 +485,7 @@ export default function NewApplicationPage() {
                 <label htmlFor="status" className={labelClass}>
                   CURRENT STATUS
                 </label>
+
                 <select
                   id="status"
                   value={form.status}
@@ -355,6 +508,7 @@ export default function NewApplicationPage() {
                 <label htmlFor="priority" className={labelClass}>
                   PRIORITY
                 </label>
+
                 <select
                   id="priority"
                   value={form.priority}
@@ -373,6 +527,7 @@ export default function NewApplicationPage() {
                 <label htmlFor="source" className={labelClass}>
                   WHERE DID YOU FIND IT?
                 </label>
+
                 <select
                   id="source"
                   value={form.source}
@@ -393,6 +548,7 @@ export default function NewApplicationPage() {
                 <label htmlFor="appliedAt" className={labelClass}>
                   APPLICATION DATE
                 </label>
+
                 <input
                   id="appliedAt"
                   type="date"
@@ -422,6 +578,7 @@ export default function NewApplicationPage() {
                 <label htmlFor="description" className={labelClass}>
                   JOB DESCRIPTION
                 </label>
+
                 <textarea
                   id="description"
                   rows={3}
@@ -439,6 +596,7 @@ export default function NewApplicationPage() {
                 <label htmlFor="notes" className={labelClass}>
                   YOUR NOTES
                 </label>
+
                 <textarea
                   id="notes"
                   rows={3}
@@ -464,7 +622,7 @@ export default function NewApplicationPage() {
 
             <button
               type="submit"
-              disabled={loading || success}
+              disabled={loading || success || companiesLoading}
               className="inline-flex h-12 items-center justify-center gap-2 rounded-full bg-[#7965CD] px-7 text-sm font-semibold text-white transition hover:bg-[#6C57BD] disabled:cursor-not-allowed disabled:opacity-60"
             >
               {loading
@@ -472,6 +630,7 @@ export default function NewApplicationPage() {
                 : success
                   ? "Application saved"
                   : "Save application"}
+
               {!loading && !success && (
                 <ArrowRight width={17} height={17} />
               )}
